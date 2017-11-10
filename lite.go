@@ -122,15 +122,15 @@ func fromIPv4(ip string) int64 {
 	return (a << 24) + (b << 16) + (c << 8) + d
 }
 
-// SqliteFuncReg contains the fields necessary to register a custom Sqlite function
-type SqliteFuncReg struct {
+// FuncReg contains the fields necessary to register a custom Sqlite function
+type FuncReg struct {
 	Name string
 	Impl interface{}
 	Pure bool
 }
 
 // ipFuncs are functions to convert ipv4 to and from int32
-var ipFuncs = []SqliteFuncReg{
+var ipFuncs = []FuncReg{
 	{"iptoa", toIPv4, true},
 	{"atoip", fromIPv4, true},
 }
@@ -140,7 +140,7 @@ var ipFuncs = []SqliteFuncReg{
 // because there's no way to have multiple instances open associate the connection with the DSN
 //
 // Since our use case is to normally have one instance open this should be workable for now
-func sqlInit(name, hook string, funcs ...SqliteFuncReg) {
+func sqlInit(name, hook string, funcs ...FuncReg) {
 	imu.Lock()
 	defer imu.Unlock()
 
@@ -390,7 +390,7 @@ type SQLConfig struct {
 	failIfMissing bool
 	hook          string
 	driver        string
-	funcs         []SqliteFuncReg
+	funcs         []FuncReg
 }
 
 // ConfigFunc processes an SQLConfig
@@ -418,7 +418,7 @@ func ConfigHook(hook string) ConfigFunc {
 }
 
 // ConfigFuncs specifies the sqlite functions to register
-func ConfigFuncs(funcs ...SqliteFuncReg) ConfigFunc {
+func ConfigFuncs(funcs ...FuncReg) ConfigFunc {
 	return func(c *SQLConfig) {
 		c.funcs = funcs
 	}

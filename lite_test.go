@@ -200,7 +200,7 @@ type unknownStruct struct{}
 
 func TestSqliteFuncsBad(t *testing.T) {
 	u := &unknownStruct{}
-	badFuncs := []SqliteFuncReg{
+	badFuncs := []FuncReg{
 		{"", u, true},
 	}
 	const driver = "badfunc"
@@ -616,4 +616,79 @@ func cachedDB(t *testing.T) *sql.DB {
 		t.Fatal(err)
 	}
 	return db
+}
+
+func TestSqliteCreate(t *testing.T) {
+	db, err := Open(testFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	sql := `
+	create table foo (id integer not null primary key, name text);
+	delete from foo;
+	`
+	_, err = db.Exec(sql)
+	if err != nil {
+		t.Fatalf("%q: %s\n", err, sql)
+	}
+
+	_, err = db.Exec("insert into foo(id, name) values(1, 'foo'), (2, 'bar'), (3, 'baz')")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := db.Query("select id, name from foo")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for rows.Next() {
+		var id int
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			t.Fatal(err)
+		}
+		t.Log(id, name)
+	}
+	rows.Close()
+}
+
+func TestSqliteDelete(t *testing.T) {
+	db, _ := Open(testFile)
+	cnt, err := dbutil.Update(db, "delete from foo where id=?", 13)
+	if err != nil {
+		t.Fatal("DELETE ERROR: ", err)
+	}
+	t.Log("DELETED: ", cnt)
+	db.Close()
+}
+
+func TestSqliteInsert(t *testing.T) {
+	db, _ := Open(testFile)
+	cnt, err := dbutil.Update(db, "insert into foo (id,name) values(?,?)", 13, "bakers")
+	if err != nil {
+		t.Log("INSERT ERROR: ", err)
+	}
+	t.Log("INSERTED: ", cnt)
+	db.Close()
+}
+
+func TestSqliteUpdate(t *testing.T) {
+	db, _ := Open(testFile)
+	cnt, err := dbutil.Update(db, "update foo set id=23 where id > ? and name like ?", "3", "bi%")
+	if err != nil {
+		t.Log("UPDATE ERROR: ", err)
+	} else {
+		t.Log("UPDATED: ", cnt)
+	}
+	db.Close()
+}
+
+func TestMissingDB(t *testing.T) {
+	_, err := Open("this_path_does_not_exist", ConfigFailIfMissing(true))
+	if err == nil {
+		t.Error("should have had error for missing file")
+	}
 }
