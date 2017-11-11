@@ -156,7 +156,7 @@ func sqlInit(name, hook string, funcs ...FuncReg) {
 					return err
 				}
 			}
-			if filename, err := ConnFilename(conn); err == nil {
+			if filename, err := connFilename(conn); err == nil {
 				register(filename, conn)
 			} else {
 				return errors.Wrapf(err, "couldn't get filename for connection: %+v", conn)
@@ -181,8 +181,8 @@ func Filename(db *sql.DB) string {
 	return file
 }
 
-// ConnFilename returns the filename of the connection
-func ConnFilename(conn *sqlite3.SQLiteConn) (string, error) {
+// connFilename returns the filename of the connection
+func connFilename(conn *sqlite3.SQLiteConn) (string, error) {
 	var filename string
 	fn := func(cols []string, row int, values []driver.Value) error {
 		if len(values) < 3 {
@@ -194,8 +194,7 @@ func ConnFilename(conn *sqlite3.SQLiteConn) (string, error) {
 		filename = string(values[2].([]uint8))
 		return nil
 	}
-	err := ConnQuery(conn, fn, "PRAGMA database_list")
-	return filename, err
+	return filename, connQuery(conn, fn, "PRAGMA database_list")
 }
 
 // Close cleans up the database before closing
@@ -270,7 +269,7 @@ SELECT name FROM sqlite_master
 WHERE type='table'
 ORDER BY name
 `
-	return dbutil.PrintTable(db, w, true, q)
+	return dbutil.NewStreamer(db, q).Table(w, true, nil)
 }
 
 // Commands emulates the client reading a series of commands
@@ -347,8 +346,8 @@ func Commands(db *sql.DB, buffer string, echo bool, w io.Writer) error {
 	return nil
 }
 
-// ConnQuery executes a query on a driver connection
-func ConnQuery(conn *sqlite3.SQLiteConn, fn func([]string, int, []driver.Value) error, query string, args ...driver.Value) error {
+// connQuery executes a query on a driver connection
+func connQuery(conn *sqlite3.SQLiteConn, fn func([]string, int, []driver.Value) error, query string, args ...driver.Value) error {
 	rows, err := conn.Query(query, args)
 	if err != nil {
 		return err
@@ -385,50 +384,57 @@ func Version() (string, int, string) {
 	return sqlite3.Version()
 }
 
-// SQLConfig represents the sqlite configuration options
-type SQLConfig struct {
-	failIfMissing bool
-	hook          string
-	driver        string
-	funcs         []FuncReg
+// sqlConfig represents the sqlite configuration options
+type sqlConfig struct {
+	fail   bool
+	hook   string
+	driver string
+	funcs  []FuncReg
 }
 
-// ConfigFunc processes an SQLConfig
-type ConfigFunc func(*SQLConfig)
-
-// ConfigDriverName specifies the driver name to use
-func ConfigDriverName(name string) ConfigFunc {
-	return func(c *SQLConfig) {
-		c.driver = name
-	}
+type Opener struct {
+	file   string
+	config sqlConfig
 }
 
-//ConfigFailIfMissing requires the database to exist before opening
-func ConfigFailIfMissing(fail bool) ConfigFunc {
-	return func(c *SQLConfig) {
-		c.failIfMissing = fail
-	}
+// FailIfMissing will cause open to fail if file does not already exist
+func (o *Opener) FailIfMissing(fail bool) *Opener {
+	o.config.fail = fail
+	return o
 }
 
-// ConfigHook specifies the connection hook query to run
-func ConfigHook(hook string) ConfigFunc {
-	return func(c *SQLConfig) {
-		c.hook = hook
-	}
+// Hook adds an sql query to execute for each new connection
+func (o *Opener) Hook(hook string) *Opener {
+	o.config.hook = hook
+	return o
 }
 
-// ConfigFuncs specifies the sqlite functions to register
-func ConfigFuncs(funcs ...FuncReg) ConfigFunc {
-	return func(c *SQLConfig) {
-		c.funcs = funcs
-	}
+// Driver sets the driver name used
+func (o *Opener) Driver(driver string) *Opener {
+	o.config.driver = driver
+	return o
 }
 
-// Open returns a db struct for the given file
-func Open(file string, opts ...ConfigFunc) (*sql.DB, error) {
-	config := &SQLConfig{driver: DefaultDriver}
-	for _, opt := range opts {
-		opt(config)
+// Functions registers custom functions
+func (o *Opener) Functions(functions ...FuncReg) *Opener {
+	o.config.funcs = functions
+	return o
+}
+
+// Open returns a DB connection
+func (o *Opener) Open() (*sql.DB, error) {
+	return open(o.file, &o.config)
+}
+
+// NewOpener returns an Opener
+func NewOpener(file string) *Opener {
+	return &Opener{file: file, config: sqlConfig{driver: DefaultDriver}}
+}
+
+// open returns a db handler for the given file
+func open(file string, config *sqlConfig) (*sql.DB, error) {
+	if config == nil {
+		config = &sqlConfig{driver: DefaultDriver}
 	}
 	sqlInit(config.driver, config.hook, config.funcs...)
 	if strings.Index(file, ":memory:") < 0 {
@@ -437,8 +443,14 @@ func Open(file string, opts ...ConfigFunc) (*sql.DB, error) {
 			return nil, errors.Wrapf(err, "parse file: %s", file)
 		}
 		filename := full.Path
-		os.Mkdir(path.Dir(filename), 0777)
-		if !config.failIfMissing {
+		dirName := path.Dir(filename)
+		// create directory if necessary
+		if _, err := os.Stat(dirName); os.IsNotExist(err) {
+			if err := os.Mkdir(dirName, 0777); err != nil {
+				return nil, err
+			}
+		}
+		if !config.fail {
 			if _, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0666); err != nil {
 				return nil, errors.Wrapf(err, "os file: %s", file)
 			}
@@ -451,6 +463,11 @@ func Open(file string, opts ...ConfigFunc) (*sql.DB, error) {
 		return db, errors.Wrapf(err, "sql file: %s", file)
 	}
 	return db, db.Ping()
+}
+
+// Open returns a db handler for the given file
+func Open(file string) (*sql.DB, error) {
+	return open(file, nil)
 }
 
 // ServerAction represents an async write request to database
@@ -472,10 +489,9 @@ type ServerQuery struct {
 func Server(db *sql.DB, r chan ServerQuery, w chan ServerAction) {
 	var wg sync.WaitGroup
 	wg.Add(1)
-	s := dbutil.NewStreamer(db)
 	go func() {
 		for q := range r {
-			err := s.Stream(q.Reply, q.Query, q.Args...)
+			err := dbutil.NewStreamer(db, q.Query, q.Args...).Stream(q.Reply)
 
 			if q.Error != nil {
 				// use goroutine so we don't block on sending errors

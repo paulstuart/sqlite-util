@@ -133,7 +133,7 @@ func prepare(db *sql.DB) {
 	db.Exec(query, "klm", 2, "of a kind")
 }
 func TestFuncs(t *testing.T) {
-	db, err := Open(":memory:", ConfigFuncs(ipFuncs...), ConfigDriverName("funky"))
+	db, err := NewOpener(":memory:").Functions(ipFuncs...).Driver("funky").Open()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +175,7 @@ insert into iptest values(atoip('192.168.1.1'));
 
 func TestSqliteBadHook(t *testing.T) {
 	const badDriver = "badhook"
-	_, err := Open(":memory:", ConfigDriverName(badDriver), ConfigHook(queryBad))
+	_, err := NewOpener(":memory:").Driver(badDriver).Hook(queryBad).Open()
 
 	if err == nil {
 		t.Fatal("expected error for bad hook")
@@ -387,7 +387,7 @@ func TestConnQueryOk(t *testing.T) {
 	}
 	drvr := &sqlite3.SQLiteDriver{
 		ConnectHook: func(conn *sqlite3.SQLiteConn) error {
-			return ConnQuery(conn, fn, query)
+			return connQuery(conn, fn, query)
 		},
 	}
 	sql.Register(name, drvr)
@@ -404,7 +404,7 @@ func TestConnQueryBad(t *testing.T) {
 	}
 	drvr := &sqlite3.SQLiteDriver{
 		ConnectHook: func(conn *sqlite3.SQLiteConn) error {
-			return ConnQuery(conn, fn, queryBad)
+			return connQuery(conn, fn, queryBad)
 		},
 	}
 	sql.Register(name, drvr)
@@ -433,7 +433,7 @@ func TestConnQueryFuncBad(t *testing.T) {
 	}
 	drvr := &sqlite3.SQLiteDriver{
 		ConnectHook: func(conn *sqlite3.SQLiteConn) error {
-			return ConnQuery(conn, fn, querySelect)
+			return connQuery(conn, fn, querySelect)
 		},
 	}
 	sql.Register(name, drvr)
@@ -687,7 +687,7 @@ func TestSqliteUpdate(t *testing.T) {
 }
 
 func TestMissingDB(t *testing.T) {
-	_, err := Open("this_path_does_not_exist", ConfigFailIfMissing(true))
+	_, err := NewOpener("this_path_does_not_exist").FailIfMissing(true).Open()
 	if err == nil {
 		t.Error("should have had error for missing file")
 	}
