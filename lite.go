@@ -470,47 +470,27 @@ func Open(file string) (*sql.DB, error) {
 	return open(file, nil)
 }
 
-// ServerAction represents an async write request to database
-type ServerAction struct {
-	Query    string
-	Args     []interface{}
-	Callback func(int64, int64, error)
+// Server provides marshaled writes to the sqlite database
+type Server struct {
+	db *sql.DB
+	mu sync.RWMutex
 }
 
-// ServerQuery represents an async read request to database
-type ServerQuery struct {
-	Query string
-	Args  []interface{}
-	Reply dbutil.RowFunc
-	Error chan error
+// NewServer returns a server
+func NewServer(db *sql.DB) *Server {
+	return &Server{db: db}
 }
 
-// Server provides serialized access to the database
-func Server(db *sql.DB, r chan ServerQuery, w chan ServerAction) {
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		for q := range r {
-			err := dbutil.NewStreamer(db, q.Query, q.Args...).Stream(q.Reply)
+// Exec executes a writeable statement
+func (s *Server) Exec(query string, args ...interface{}) (last int64, affected int64, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return dbutil.Exec(s.db, query, args...)
+}
 
-			if q.Error != nil {
-				// use goroutine so we don't block on sending errors
-				go func() {
-					if err != nil {
-						err = errors.Wrapf(err, "stream error")
-					}
-					q.Error <- err
-				}()
-			}
-		}
-		wg.Done()
-	}()
-	wg.Add(1)
-	go func() {
-		for q := range w {
-			q.Callback(dbutil.Exec(db, q.Query, q.Args...))
-		}
-		wg.Done()
-	}()
-	wg.Wait()
+// Stream returns query results to the given function
+func (s *Server) Stream(fn dbutil.RowFunc, query string, args ...interface{}) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return dbutil.NewStreamer(s.db, query, args...).Stream(fn)
 }

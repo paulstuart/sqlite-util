@@ -9,6 +9,7 @@ import (
 	"os"
 	"sync"
 	"testing"
+	"time"
 
 	sqlite3 "github.com/mattn/go-sqlite3"
 	"github.com/paulstuart/dbutil"
@@ -43,7 +44,7 @@ PRAGMA cache_size= 10485760;
 
 PRAGMA journal_mode = WAL;
 
-PRAGMA synchronous = FULL;
+PRAGMA synchronous = NORMAL;
 
 `
 	hammerInsert = `insert into hammer (worker, counter) values (?,?)`
@@ -465,18 +466,13 @@ func errLogger(t *testing.T) chan error {
 }
 
 func TestServerWrite(t *testing.T) {
-	db := getHammerDB(t, "")
-	r := make(chan ServerQuery, 4096)
-	w := make(chan ServerAction, 4096)
-	e := errLogger(t)
-	go Server(db, r, w)
-	batter(t, w, 10, 100000)
-	close(r)
-	close(w)
-	close(e)
+	db := getHammerDB(t, "") //":memory:")
+	s := NewServer(db)
+	batter(t, s, 10, 10000)
 	Close(db)
 }
 
+/*
 func TestServerRead(t *testing.T) {
 	db := fakeHammer(t, 10, 1000)
 	r := make(chan ServerQuery, 4096)
@@ -508,39 +504,27 @@ func TestServerBadQuery(t *testing.T) {
 	}
 	Close(db)
 }
+*/
 
-func batter(t *testing.T, w chan ServerAction, workers, count int) {
+func batter(t *testing.T, s *Server, workers, count int) {
 
 	var wg sync.WaitGroup
-
-	response := func(affected, last int64, err error) {
-		//	t.Logf("aff:%d last:%d err:%v\n", affected, last, err)
-		wg.Done()
-	}
-
-	queue := make(chan int, 4096)
+	start := time.Now()
+	wg.Add(workers)
 	for i := 0; i < workers; i++ {
-		wg.Add(1)
 		go func(worker int) {
 			t.Logf("worker:%d\n", worker)
-			for cnt := range queue {
-				wg.Add(1)
-				w <- ServerAction{
-					Query:    hammerInsert,
-					Args:     []interface{}{worker, cnt},
-					Callback: response,
+			for cnt := 0; cnt < count; cnt++ {
+				if _, _, err := s.Exec(hammerInsert, worker, cnt); err != nil {
+					t.Fatal(err)
 				}
 			}
 			wg.Done()
 			t.Logf("done:%d\n", worker)
 		}(i)
 	}
-	for i := 0; i < count; i++ {
-		queue <- i
-	}
-	close(queue)
 	wg.Wait()
-	t.Log("battered")
+	t.Logf("records written: %d, elapsed: %v", workers*count, time.Now().Sub(start))
 }
 
 func butter(t *testing.T, r chan ServerQuery, workers, count int) {
