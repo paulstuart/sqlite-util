@@ -3,9 +3,9 @@ package sqlite
 import (
 	"database/sql"
 	"database/sql/driver"
+	"flag"
 	"fmt"
 	"io/ioutil"
-	"math/rand"
 	"os"
 	"sync"
 	"testing"
@@ -38,7 +38,11 @@ create table hammer (
 	ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 
+insert into hammer(worker,counter) values(23, 69);
+insert into hammer(worker,counter) values(99, 77);
 .tables
+
+select * from hammer;
 
 PRAGMA cache_size= 10485760;
 
@@ -48,7 +52,23 @@ PRAGMA synchronous = NORMAL;
 
 `
 	hammerInsert = `insert into hammer (worker, counter) values (?,?)`
+
+	testWorkers = 10
+	testCount   = 10000
 )
+
+var (
+	testFile = "test.db"
+	testout  = ioutil.Discard
+)
+
+func init() {
+	flag.Parse()
+	if testing.Verbose() {
+		testout = os.Stdout
+	}
+	os.Remove(testFile)
+}
 
 func hammer(t *testing.T, workers, count int) {
 	db := getHammerDB(t, "file::memory:?cache=shared")
@@ -90,23 +110,10 @@ func getHammerDB(t *testing.T, name string) *sql.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fmt.Fprintln(testout, "TESTOUT")
 	if err := Commands(db, hammerTime, false, testout); err != nil {
 		t.Fatal(err)
 	}
 	return db
-}
-
-var (
-	testFile = "test.db"
-	testout  = ioutil.Discard
-)
-
-func init() {
-	os.Remove(testFile)
-	if testing.Verbose() {
-		testout = os.Stdout
-	}
 }
 
 func memDB(t *testing.T) *sql.DB {
@@ -133,6 +140,7 @@ func prepare(db *sql.DB) {
 	db.Exec(query, "hij", 42, "meaning of life")
 	db.Exec(query, "klm", 2, "of a kind")
 }
+
 func TestFuncs(t *testing.T) {
 	db, err := NewOpener(":memory:").Functions(ipFuncs...).Driver("funky").Open()
 	if err != nil {
@@ -228,16 +236,6 @@ func TestSqliteBadPath(t *testing.T) {
 	}
 }
 
-func TestSqliteBadURI(t *testing.T) {
-	sqlInit(DefaultDriver, "")
-	_, err := Open("test.db ! % # mode ro bad=")
-	if err == nil {
-		t.Fatal("expected error for bad uri")
-	} else {
-		t.Logf("got expected error: %v\n", err)
-	}
-}
-
 func TestVersion(t *testing.T) {
 	_, i, _ := Version()
 	if i < 3017000 {
@@ -280,7 +278,9 @@ func TestFile(t *testing.T) {
 	if err := os.Chdir("sql"); err != nil {
 		t.Fatal(err)
 	}
-	if err := File(db, "test.sql", true, testout); err != nil {
+	fmt.Fprintf(testout, "V is for: %t\n", testing.Verbose())
+	if err := File(db, "test.sql", testing.Verbose(), testout); err != nil {
+		//if err := File(db, "test.sql", false, ioutil.Discard); err != nil {
 		t.Fatal(err)
 	}
 	limit := 3
@@ -455,151 +455,116 @@ func TestOpenBadFile(t *testing.T) {
 	}
 }
 
-func errLogger(t *testing.T) chan error {
-	e := make(chan error, 4096)
-	go func() {
-		for err := range e {
-			t.Error(err)
-		}
-	}()
-	return e
-}
-
 func TestServerWrite(t *testing.T) {
 	db := getHammerDB(t, "") //":memory:")
 	s := NewServer(db)
-	batter(t, s, 10, 10000)
+	elapsed, err := batter(s, testWorkers, testCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("writes: %d elapsed: %v", testWorkers*testCount, elapsed)
 	Close(db)
 }
 
-/*
 func TestServerRead(t *testing.T) {
-	db := fakeHammer(t, 10, 1000)
-	r := make(chan ServerQuery, 4096)
-	e := errLogger(t)
-	go Server(db, r, nil)
-	butter(t, r, 2, 10)
-	close(r)
-	close(e)
+	db := getHammerDB(t, "hammer.db")
+	s := NewServer(db)
+	elapsed, err := butter(s, testWorkers, testCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("reads: %d elapsed: %v", testWorkers*testCount, elapsed)
 	Close(db)
 }
 
-func TestServerBadQuery(t *testing.T) {
-	db := fakeHammer(t, 10, 1000)
-	r := make(chan ServerQuery, 4096)
-	go Server(db, r, nil)
-	ec := make(chan error)
-	r <- ServerQuery{
-		Query: queryBad,
-		Args:  nil,
-		//Reply: nullStream,
-		Error: ec,
+func TestServerReadWrite(t *testing.T) {
+	files := []string{
+		"hammer.db",
+		/*
+			"file:hammer.db?cache=shared",
+			"file::memory:?cache=shared",
+		*/
 	}
-	close(r)
-	err := <-ec
-	if err == nil {
-		t.Fatal("expected missing args error")
-	} else {
-		t.Log(err)
+	for _, file := range files {
+		t.Log("testing file:", file)
+		readWrite(t, file)
 	}
+}
+
+func readWrite(t *testing.T, file string) {
+	db := getHammerDB(t, file)
+	s := NewServer(db)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	workers := 10
+	count := 1000
+	go func() {
+		elapsed, err := batter(s, workers, count)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("reads: %d elapsed: %v", workers*count, elapsed)
+		wg.Done()
+	}()
+	go func() {
+		elapsed, err := butter(s, 10, 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("writes: %d elapsed: %v", workers*count, elapsed)
+		wg.Done()
+	}()
+	wg.Wait()
 	Close(db)
 }
-*/
 
-func batter(t *testing.T, s *Server, workers, count int) {
-
+func batter(s *Server, workers, count int) (time.Duration, error) {
 	var wg sync.WaitGroup
 	start := time.Now()
 	wg.Add(workers)
 	for i := 0; i < workers; i++ {
 		go func(worker int) {
-			t.Logf("worker:%d\n", worker)
 			for cnt := 0; cnt < count; cnt++ {
 				if _, _, err := s.Exec(hammerInsert, worker, cnt); err != nil {
-					t.Fatal(err)
+					panic(err)
 				}
 			}
 			wg.Done()
-			t.Logf("done:%d\n", worker)
 		}(i)
 	}
 	wg.Wait()
-	t.Logf("records written: %d, elapsed: %v", workers*count, time.Now().Sub(start))
+	return time.Now().Sub(start), nil
 }
 
-func butter(t *testing.T, r chan ServerQuery, workers, count int) {
+func strm(cols []string, row int, values []interface{}) error {
+	fmt.Println("VALUES:", values)
+	return nil
+}
 
+func butter(s *Server, workers, count int) (time.Duration, error) {
 	limit := 100
 	var wg sync.WaitGroup
 
-	ec := make(chan error, count)
-	var tally int
 	replies := func(columns []string, row int, values []interface{}) error {
-		if row == 0 {
-			t.Logf("columns: %v\n", columns)
-		}
-		t.Logf("row:%d values:%v\n", row, values)
-		tally++
+		//fmt.Println("COLS:", columns, "VALS:", values)
 		return nil
 	}
 
-	go func() {
-		for err := range ec {
-			if err != nil {
-				t.Fatal(err)
-			}
-			wg.Done()
-		}
-	}()
-
+	start := time.Now()
 	query := "select * from hammer limit ?"
-	queue := make(chan int, 4096)
+	wg.Add(workers)
 	for i := 0; i < workers; i++ {
-		wg.Add(1)
 		go func(worker int) {
-			t.Logf("worker:%d\n", worker)
-			for _ = range queue {
-				wg.Add(1)
-				r <- ServerQuery{
-					Query: query,
-					Args:  []interface{}{limit},
-					Reply: replies,
-					Error: ec,
+			for cnt := 0; cnt < count; cnt++ {
+				if err := s.Stream(replies, query, limit); err != nil {
+					fmt.Println("WORKER:", worker, "CNT:", cnt, err)
 				}
 			}
 			wg.Done()
-			t.Logf("done:%d\n", worker)
 		}(i)
 	}
-	for i := 0; i < count; i++ {
-		queue <- i
-	}
-	close(queue)
 	wg.Wait()
-	limit *= count
-	if tally != limit {
-		t.Errorf("expected %d rows but got back %d\n", limit, tally)
-	}
-	t.Log("buttered")
-}
-
-func fakeHammer(t *testing.T, workers, count int) *sql.DB {
-	db := getHammerDB(t, "")
-	for i := 0; i < count; i++ {
-		worker := rand.Int() % workers
-		if _, err := db.Exec(hammerInsert, worker, i); err != nil {
-			t.Fatalf("worker:%d count:%d, error:%s\n", worker, i, err.Error())
-		}
-	}
-	return db
-}
-
-func cachedDB(t *testing.T) *sql.DB {
-	db, err := Open("file::memory:?cache=shared")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return db
+	return time.Now().Sub(start), nil
 }
 
 func TestSqliteCreate(t *testing.T) {
@@ -637,37 +602,6 @@ func TestSqliteCreate(t *testing.T) {
 		t.Log(id, name)
 	}
 	rows.Close()
-}
-
-func TestSqliteDelete(t *testing.T) {
-	db, _ := Open(testFile)
-	cnt, err := dbutil.Update(db, "delete from foo where id=?", 13)
-	if err != nil {
-		t.Fatal("DELETE ERROR: ", err)
-	}
-	t.Log("DELETED: ", cnt)
-	db.Close()
-}
-
-func TestSqliteInsert(t *testing.T) {
-	db, _ := Open(testFile)
-	cnt, err := dbutil.Update(db, "insert into foo (id,name) values(?,?)", 13, "bakers")
-	if err != nil {
-		t.Log("INSERT ERROR: ", err)
-	}
-	t.Log("INSERTED: ", cnt)
-	db.Close()
-}
-
-func TestSqliteUpdate(t *testing.T) {
-	db, _ := Open(testFile)
-	cnt, err := dbutil.Update(db, "update foo set id=23 where id > ? and name like ?", "3", "bi%")
-	if err != nil {
-		t.Log("UPDATE ERROR: ", err)
-	} else {
-		t.Log("UPDATED: ", cnt)
-	}
-	db.Close()
 }
 
 func TestMissingDB(t *testing.T) {

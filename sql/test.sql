@@ -1,6 +1,6 @@
 .echo on
 
-.print starting off 
+.print 'starting off test.sql'
 
 PRAGMA foreign_keys=OFF;
 PRAGMA journal_mode = WAL;

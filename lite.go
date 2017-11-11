@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -273,7 +272,6 @@ ORDER BY name
 }
 
 // Commands emulates the client reading a series of commands
-// TODO: is this available in the C api?
 func Commands(db *sql.DB, buffer string, echo bool, w io.Writer) error {
 	if w == nil {
 		w = os.Stdout
@@ -282,10 +280,6 @@ func Commands(db *sql.DB, buffer string, echo bool, w io.Writer) error {
 	clean := commentC.ReplaceAll([]byte(buffer), []byte{})
 	clean = commentSQL.ReplaceAll(clean, []byte{})
 
-	// .read, et al gets a fake ';' to split on
-	//clean = readline.ReplaceAll(clean, []byte("${1};"))
-
-	//lines := strings.Split(string(clean), ";")
 	lines := strings.Split(string(clean), "\n")
 	multiline := "" // triggers are multiple lines
 	trigger := false
@@ -311,7 +305,7 @@ func Commands(db *sql.DB, buffer string, echo bool, w io.Writer) error {
 			str := strings.TrimSpace(line[7:])
 			str = strings.Trim(str, `"`)
 			str = strings.Trim(str, "'")
-			fmt.Println(str)
+			fmt.Fprintln(w, str)
 			continue
 		case strings.HasPrefix(line, ".tables"):
 			if err := listTables(db, w); err != nil {
@@ -338,7 +332,11 @@ func Commands(db *sql.DB, buffer string, echo bool, w io.Writer) error {
 		if strings.Index(line, ";") < 0 {
 			continue
 		}
-		if _, err := db.Exec(multiline); err != nil {
+		if startsWith(multiline, "SELECT") {
+			if err := dbutil.NewStreamer(db, line).Table(w, false, nil); err != nil {
+				return errors.Wrapf(err, "SELECT QUERY: %s FILE: %s", line, Filename(db))
+			}
+		} else if _, err := db.Exec(multiline); err != nil {
 			return errors.Wrapf(err, "EXEC QUERY: %s FILE: %s", line, Filename(db))
 		}
 		multiline = ""
@@ -438,18 +436,25 @@ func open(file string, config *sqlConfig) (*sql.DB, error) {
 	}
 	sqlInit(config.driver, config.hook, config.funcs...)
 	if strings.Index(file, ":memory:") < 0 {
-		full, err := url.Parse(file)
-		if err != nil {
-			return nil, errors.Wrapf(err, "parse file: %s", file)
+		filename := file
+		if strings.HasPrefix(filename, "file:") {
+			filename = filename[5:]
 		}
-		filename := full.Path
-		dirName := path.Dir(filename)
+		if strings.HasPrefix(filename, "//") {
+			filename = filename[2:]
+		}
+		if i := strings.Index(filename, "?"); i > 0 {
+			filename = filename[:i]
+		}
+
 		// create directory if necessary
+		dirName := path.Dir(filename)
 		if _, err := os.Stat(dirName); os.IsNotExist(err) {
 			if err := os.Mkdir(dirName, 0777); err != nil {
 				return nil, err
 			}
 		}
+
 		if !config.fail {
 			if _, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0666); err != nil {
 				return nil, errors.Wrapf(err, "os file: %s", file)
