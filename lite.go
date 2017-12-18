@@ -494,7 +494,7 @@ func (s *Server) Exec(query string, args ...interface{}) (last int64, affected i
 }
 
 // Stream returns query results to the given function
-func (s *Server) Stream(fn dbutil.RowFunc, query string, args ...interface{}) error {
+func (s *Server) Stream(fn dbutil.StreamFunc, query string, args ...interface{}) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return dbutil.NewStreamer(s.db, query, args...).Stream(fn)
