@@ -190,7 +190,7 @@ func connFilename(conn *sqlite3.SQLiteConn) (string, error) {
 		if values[2] == nil {
 			return fmt.Errorf("nil values")
 		}
-		filename = string(values[2].([]uint8))
+		filename = string(values[2].(string))
 		return nil
 	}
 	return filename, connQuery(conn, fn, "PRAGMA database_list")
