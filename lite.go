@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"os"
 	"path"
 	"path/filepath"
@@ -78,7 +79,6 @@ var (
 	pragmas    = strings.Fields(pragmaList)
 	commentC   = regexp.MustCompile(`(?s)/\*.*?\*/`)
 	commentSQL = regexp.MustCompile(`\s*--.*`)
-	readline   = regexp.MustCompile(`(\.[a-z]+( .*)*)`)
 
 	registry    = make(map[string]*sqlite3.SQLiteConn)
 	initialized = make(map[string]struct{})
@@ -176,7 +176,7 @@ func sqlInit(name, hook string, funcs ...FuncReg) {
 // Filename returns the filename of the DB
 func Filename(db *sql.DB) string {
 	var seq, name, file string
-	dbutil.Row(db, []interface{}{&seq, &name, &file}, "PRAGMA database_list")
+	_ = dbutil.Row(db, []interface{}{&seq, &name, &file}, "PRAGMA database_list")
 	return file
 }
 
@@ -198,8 +198,12 @@ func connFilename(conn *sqlite3.SQLiteConn) (string, error) {
 
 // Close cleans up the database before closing
 func Close(db *sql.DB) {
-	db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
-	db.Close()
+	if _, err := db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		log.Printf("error executing WAL checkpoint: %v\n", err)
+	}
+	if err := db.Close(); err != nil {
+		log.Printf("error closing database: %v\n", err)
+	}
 }
 
 // Backup backs up the open database
@@ -215,23 +219,29 @@ func backup(db *sql.DB, dest string, step int, w io.Writer) error {
 		return err
 	}
 	defer destDb.Close()
-	err = destDb.Ping()
 
-	fromDB := Filename(db)
-	toDB := Filename(destDb)
+	if err = destDb.Ping(); err != nil {
+		return err
+	}
 
-	from := registered(fromDB)
-	to := registered(toDB)
-
+	from := registered(Filename(db))
+	to := registered(Filename(destDb))
 	bk, err := to.Backup("main", from, "main")
 	if err != nil {
 		return err
 	}
 
-	defer bk.Finish()
+	defer func() {
+		berr := bk.Finish()
+		if err != nil {
+			err = berr
+		}
+	}()
+
 	for {
 		fmt.Fprintf(w, "pagecount: %d remaining: %d\n", bk.PageCount(), bk.Remaining())
-		done, err := bk.Step(step)
+		var done bool
+		done, err = bk.Step(step)
 		if done || err != nil {
 			break
 		}
@@ -244,7 +254,7 @@ func Pragmas(db *sql.DB, w io.Writer) {
 	for _, pragma := range pragmas {
 		row := db.QueryRow("PRAGMA " + pragma)
 		var value string
-		row.Scan(&value)
+		_ = row.Scan(&value)
 		fmt.Fprintf(w, "pragma %s = %s\n", pragma, value)
 	}
 }
@@ -280,7 +290,7 @@ func Commands(db *sql.DB, buffer string, echo bool, w io.Writer) error {
 	clean := commentC.ReplaceAll([]byte(buffer), []byte{})
 	clean = commentSQL.ReplaceAll(clean, []byte{})
 
-	lines := strings.Split(string(clean), "\n")
+	lines := strings.Split(string(clean), ";\n")
 	multiline := "" // triggers are multiple lines
 	trigger := false
 	for _, line := range lines {
@@ -329,7 +339,7 @@ func Commands(db *sql.DB, buffer string, echo bool, w io.Writer) error {
 		} else {
 			multiline = line
 		}
-		if strings.Index(line, ";") < 0 {
+		if strings.Contains(line, ";") {
 			continue
 		}
 		if startsWith(multiline, "SELECT") {
@@ -390,43 +400,44 @@ type sqlConfig struct {
 	funcs  []FuncReg
 }
 
-type Opener struct {
+// Options consolidate all sqlite options
+type Options struct {
 	file   string
 	config sqlConfig
 }
 
 // FailIfMissing will cause open to fail if file does not already exist
-func (o *Opener) FailIfMissing(fail bool) *Opener {
+func (o *Options) FailIfMissing(fail bool) *Options {
 	o.config.fail = fail
 	return o
 }
 
 // Hook adds an sql query to execute for each new connection
-func (o *Opener) Hook(hook string) *Opener {
+func (o *Options) Hook(hook string) *Options {
 	o.config.hook = hook
 	return o
 }
 
 // Driver sets the driver name used
-func (o *Opener) Driver(driver string) *Opener {
+func (o *Options) Driver(driver string) *Options {
 	o.config.driver = driver
 	return o
 }
 
 // Functions registers custom functions
-func (o *Opener) Functions(functions ...FuncReg) *Opener {
+func (o *Options) Functions(functions ...FuncReg) *Options {
 	o.config.funcs = functions
 	return o
 }
 
 // Open returns a DB connection
-func (o *Opener) Open() (*sql.DB, error) {
+func (o *Options) Open() (*sql.DB, error) {
 	return open(o.file, &o.config)
 }
 
-// NewOpener returns an Opener
-func NewOpener(file string) *Opener {
-	return &Opener{file: file, config: sqlConfig{driver: DefaultDriver}}
+// NewOptions returns an Options
+func NewOptions(file string) *Options {
+	return &Options{file: file, config: sqlConfig{driver: DefaultDriver}}
 }
 
 // open returns a db handler for the given file
@@ -435,14 +446,10 @@ func open(file string, config *sqlConfig) (*sql.DB, error) {
 		config = &sqlConfig{driver: DefaultDriver}
 	}
 	sqlInit(config.driver, config.hook, config.funcs...)
-	if strings.Index(file, ":memory:") < 0 {
+	if !strings.Contains(file, ":memory:") {
 		filename := file
-		if strings.HasPrefix(filename, "file:") {
-			filename = filename[5:]
-		}
-		if strings.HasPrefix(filename, "//") {
-			filename = filename[2:]
-		}
+		filename = strings.TrimPrefix(filename, "file:")
+		filename = strings.TrimPrefix(filename, "//")
 		if i := strings.Index(filename, "?"); i > 0 {
 			filename = filename[:i]
 		}

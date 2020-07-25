@@ -19,7 +19,6 @@ const (
 	badPath = "/path/does/not/exist/database.db"
 
 	querySelect = "select id,name,kind,modified from structs"
-	querySingle = "select id,name,kind,modified from structs limit 1"
 	queryBad    = "c e n'est pas une sql query"
 	queryCreate = `create table if not exists structs (
     id integer not null primary key,
@@ -58,16 +57,19 @@ PRAGMA synchronous = NORMAL;
 )
 
 var (
-	testFile = "test.db"
-	testout  = ioutil.Discard
+	testFile     = "test.db"
+	testout      = ioutil.Discard
+	echoCommands = false
 )
 
-func init() {
+func TestMain(m *testing.M) {
 	flag.Parse()
 	if testing.Verbose() {
 		testout = os.Stdout
+		echoCommands = true
 	}
-	os.Remove(testFile)
+	defer os.Remove(testFile)
+	os.Exit(m.Run())
 }
 
 func hammer(t *testing.T, workers, count int) {
@@ -110,7 +112,7 @@ func getHammerDB(t *testing.T, name string) *sql.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Commands(db, hammerTime, false, testout); err != nil {
+	if err := Commands(db, hammerTime, echoCommands, testout); err != nil {
 		t.Fatal(err)
 	}
 	return db
@@ -135,14 +137,14 @@ func prepare(db *sql.DB) {
 		panic(err)
 	}
 	const query = "insert into structs(name, kind, data) values(?,?,?)"
-	db.Exec(query, "abc", 23, "what ev er")
-	db.Exec(query, "def", 69, "m'kay")
-	db.Exec(query, "hij", 42, "meaning of life")
-	db.Exec(query, "klm", 2, "of a kind")
+	_, _ = db.Exec(query, "abc", 23, "what ev er")
+	_, _ = db.Exec(query, "def", 69, "m'kay")
+	_, _ = db.Exec(query, "hij", 42, "meaning of life")
+	_, _ = db.Exec(query, "klm", 2, "of a kind")
 }
 
 func TestFuncs(t *testing.T) {
-	db, err := NewOpener(":memory:").Functions(ipFuncs...).Driver("funky").Open()
+	db, err := NewOptions(":memory:").Functions(ipFuncs...).Driver("funky").Open()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +186,7 @@ insert into iptest values(atoip('192.168.1.1'));
 
 func TestSqliteBadHook(t *testing.T) {
 	const badDriver = "badhook"
-	_, err := NewOpener(":memory:").Driver(badDriver).Hook(queryBad).Open()
+	_, err := NewOptions(":memory:").Driver(badDriver).Hook(queryBad).Open()
 
 	if err == nil {
 		t.Fatal("expected error for bad hook")
@@ -329,7 +331,7 @@ func TestPragmas(t *testing.T) {
 
 func TestCommandsBadQuery(t *testing.T) {
 	db := memDB(t)
-	query := "select asdf xyz m'kay;"
+	query := "select asdf xyz m'kay;\n"
 	if err := Commands(db, query, false, nil); err == nil {
 		t.Fatal("expected error for bad query")
 	} else {
@@ -501,7 +503,7 @@ func readWrite(t *testing.T, file string) {
 	go func() {
 		elapsed, err := batter(s, workers, count)
 		if err != nil {
-			t.Fatal(err)
+			t.Error(err)
 		}
 		t.Logf("reads: %d elapsed: %v", workers*count, elapsed)
 		wg.Done()
@@ -509,7 +511,7 @@ func readWrite(t *testing.T, file string) {
 	go func() {
 		elapsed, err := butter(s, 10, 100)
 		if err != nil {
-			t.Fatal(err)
+			t.Error(err)
 		}
 		t.Logf("writes: %d elapsed: %v", workers*count, elapsed)
 		wg.Done()
@@ -533,12 +535,7 @@ func batter(s *Server, workers, count int) (time.Duration, error) {
 		}(i)
 	}
 	wg.Wait()
-	return time.Now().Sub(start), nil
-}
-
-func strm(cols []string, row int, values []interface{}) error {
-	fmt.Println("VALUES:", values)
-	return nil
+	return time.Since(start), nil
 }
 
 func butter(s *Server, workers, count int) (time.Duration, error) {
@@ -564,7 +561,7 @@ func butter(s *Server, workers, count int) (time.Duration, error) {
 		}(i)
 	}
 	wg.Wait()
-	return time.Now().Sub(start), nil
+	return time.Since(start), nil
 }
 
 func TestSqliteCreate(t *testing.T) {
@@ -605,7 +602,7 @@ func TestSqliteCreate(t *testing.T) {
 }
 
 func TestMissingDB(t *testing.T) {
-	_, err := NewOpener("this_path_does_not_exist").FailIfMissing(true).Open()
+	_, err := NewOptions("this_path_does_not_exist").FailIfMissing(true).Open()
 	if err == nil {
 		t.Error("should have had error for missing file")
 	}
