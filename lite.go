@@ -298,9 +298,6 @@ func Commands(db *sql.DB, buffer string, echo bool, w io.Writer) error {
 		if 0 == len(line) {
 			continue
 		}
-		if echo {
-			fmt.Println("CMD>", line)
-		}
 		switch {
 		case strings.HasPrefix(line, ".echo "):
 			echo, _ = strconv.ParseBool(line[6:])
@@ -342,8 +339,11 @@ func Commands(db *sql.DB, buffer string, echo bool, w io.Writer) error {
 		if strings.Contains(line, ";") {
 			continue
 		}
+		if echo {
+			fmt.Println("CMD> ", multiline)
+		}
 		if startsWith(multiline, "SELECT") {
-			if err := dbutil.NewStreamer(db, line).Table(w, false, nil); err != nil {
+			if err := dbutil.NewStreamer(db, multiline).Table(w, false, nil); err != nil {
 				return errors.Wrapf(err, "SELECT QUERY: %s FILE: %s", line, Filename(db))
 			}
 		} else if _, err := db.Exec(multiline); err != nil {
