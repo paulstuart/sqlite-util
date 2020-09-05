@@ -394,54 +394,50 @@ func Version() (string, int, string) {
 	return sqlite3.Version()
 }
 
-// sqlConfig represents the sqlite configuration options
-type sqlConfig struct {
+// Config represents the sqlite configuration options
+type Config struct {
 	fail   bool
 	hook   string
 	driver string
 	funcs  []FuncReg
 }
 
-// Options consolidate all sqlite options
-type Options struct {
-	file   string
-	config sqlConfig
-}
+type Optional func(*Config)
 
 // FailIfMissing will cause open to fail if file does not already exist
-func (o *Options) FailIfMissing(fail bool) *Options {
-	o.config.fail = fail
-	return o
+func WithExists(fail bool) Optional {
+	return func(c *Config) {
+		c.fail = fail
+	}
 }
 
-// Hook adds an sql query to execute for each new connection
-func (o *Options) Hook(hook string) *Options {
-	o.config.hook = hook
-	return o
+// WithHook adds an sql query to execute for each new connection
+func WithHook(hook string) Optional {
+	return func(c *Config) {
+		c.hook = hook
+	}
 }
 
-// Driver sets the driver name used
-func (o *Options) Driver(driver string) *Options {
-	o.config.driver = driver
-	return o
+//WithDriver sets the driver name used
+func WithDriver(driver string) Optional {
+	return func(c *Config) {
+		c.driver = driver
+	}
 }
 
 // Functions registers custom functions
-func (o *Options) Functions(functions ...FuncReg) *Options {
-	o.config.funcs = functions
-	return o
+func WithFunctions(functions ...FuncReg) Optional {
+	return func(c *Config) {
+		c.funcs = functions
+	}
 }
 
-// Open returns a DB connection
-func (o *Options) Open() (*sql.DB, error) {
-	return open(o.file, &o.config)
-}
-
+/*
 // NewOptions returns an Options
 func NewOptions(file string) *Options {
 	return &Options{file: file, config: sqlConfig{driver: DefaultDriver}}
 }
-
+*/
 // open returns a db handler for the given file
 func open(file string, config *sqlConfig) (*sql.DB, error) {
 	if config == nil {
@@ -480,8 +476,12 @@ func open(file string, config *sqlConfig) (*sql.DB, error) {
 }
 
 // Open returns a db handler for the given file
-func Open(file string) (*sql.DB, error) {
-	return open(file, nil)
+func Open(file string, opts ...Optional) (*sql.DB, error) {
+	config := new(Config)
+	for _, opt := range opts {
+		opt(config)
+	}
+	return open(file, config)
 }
 
 // Server provides marshaled writes to the sqlite database
