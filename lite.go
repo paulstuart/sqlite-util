@@ -17,7 +17,6 @@ import (
 
 	sqlite3 "github.com/mattn/go-sqlite3"
 	"github.com/paulstuart/dbutil"
-	"github.com/pkg/errors"
 )
 
 var (
@@ -83,6 +82,9 @@ var (
 	registry    = make(map[string]*sqlite3.SQLiteConn)
 	initialized = make(map[string]struct{})
 )
+
+// Hook is an SQLite connection hook
+type Hook func(*sqlite3.SQLiteConn) error
 
 func register(file string, conn *sqlite3.SQLiteConn) {
 	file, _ = filepath.Abs(file)
@@ -158,12 +160,12 @@ func sqlInit(name, hook string, funcs ...FuncReg) {
 			if filename, err := connFilename(conn); err == nil {
 				register(filename, conn)
 			} else {
-				return errors.Wrapf(err, "couldn't get filename for connection: %+v", conn)
+				return fmt.Errorf("couldn't get filename for connection: %+v, error: %w", conn, err)
 			}
 
 			if len(hook) > 0 {
 				if _, err := conn.Exec(hook, nil); err != nil {
-					return errors.Wrapf(err, "connection hook failed: %s", hook)
+					return fmt.Errorf("connection hook failed: %s -- %w", hook, err)
 				}
 			}
 
@@ -305,7 +307,7 @@ func Commands(db *sql.DB, buffer string, echo bool, w io.Writer) error {
 		case strings.HasPrefix(line, ".read "):
 			name := strings.TrimSpace(line[6:])
 			if err := File(db, name, echo, w); err != nil {
-				return errors.Wrapf(err, "read file: %s", name)
+				return fmt.Errorf("read file: %s, error: %w", name, err)
 			}
 			continue
 		case strings.HasPrefix(line, ".print "):
@@ -316,7 +318,7 @@ func Commands(db *sql.DB, buffer string, echo bool, w io.Writer) error {
 			continue
 		case strings.HasPrefix(line, ".tables"):
 			if err := listTables(db, w); err != nil {
-				return errors.Wrapf(err, "table error")
+				return fmt.Errorf("table error: %w", err)
 			}
 			continue
 		case startsWith(line, "CREATE TRIGGER"):
@@ -344,10 +346,10 @@ func Commands(db *sql.DB, buffer string, echo bool, w io.Writer) error {
 		}
 		if startsWith(multiline, "SELECT") {
 			if err := dbutil.NewStreamer(db, multiline).Table(w, false, nil); err != nil {
-				return errors.Wrapf(err, "SELECT QUERY: %s FILE: %s", line, Filename(db))
+				return fmt.Errorf("SELECT QUERY: %s FILE: %s ERROR: %w", line, Filename(db), err)
 			}
 		} else if _, err := db.Exec(multiline); err != nil {
-			return errors.Wrapf(err, "EXEC QUERY: %s FILE: %s", line, Filename(db))
+			return fmt.Errorf("EXEC QUERY: %s FILE: %s ERROR: %w", line, Filename(db), err)
 		}
 		multiline = ""
 	}
@@ -464,7 +466,7 @@ func open(file string, config *sqlConfig) (*sql.DB, error) {
 
 		if !config.fail {
 			if _, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0666); err != nil {
-				return nil, errors.Wrapf(err, "os file: %s", file)
+				return nil, fmt.Errorf("os file: %s, error: %w", file, err)
 			}
 		} else if _, err := os.Stat(filename); os.IsNotExist(err) {
 			return nil, err
@@ -472,7 +474,7 @@ func open(file string, config *sqlConfig) (*sql.DB, error) {
 	}
 	db, err := sql.Open(config.driver, file)
 	if err != nil {
-		return db, errors.Wrapf(err, "sql file: %s", file)
+		return db, fmt.Errorf("sql file: %s, error: %w", file, err)
 	}
 	return db, db.Ping()
 }
