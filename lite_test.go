@@ -7,12 +7,9 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
-	"sync"
 	"testing"
-	"time"
 
 	sqlite3 "github.com/mattn/go-sqlite3"
-	"github.com/paulstuart/dbutil"
 )
 
 const (
@@ -27,33 +24,6 @@ const (
     data blob,
     modified   DATETIME DEFAULT CURRENT_TIMESTAMP
 );`
-	hammerTime = `
-drop table if exists hammer;
-
-create table hammer (
-	id integer primary key,
-	worker int,
-	counter int,
-	ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
-);
-
-insert into hammer(worker,counter) values(23, 69);
-insert into hammer(worker,counter) values(99, 77);
-.tables
-
-select * from hammer;
-
-PRAGMA cache_size= 10485760;
-
-PRAGMA journal_mode = WAL;
-
-PRAGMA synchronous = NORMAL;
-
-`
-	hammerInsert = `insert into hammer (worker, counter) values (?,?)`
-
-	testWorkers = 10
-	testCount   = 10000
 )
 
 var (
@@ -70,52 +40,6 @@ func TestMain(m *testing.M) {
 	}
 	defer os.Remove(testFile)
 	os.Exit(m.Run())
-}
-
-func hammer(t *testing.T, workers, count int) {
-	db := getHammerDB(t, "file::memory:?cache=shared")
-	hammerDb(t, db, workers, count)
-	Close(db)
-}
-
-func hammerDb(t *testing.T, db *sql.DB, workers, count int) {
-	var wg sync.WaitGroup
-	queue := make(chan int, count)
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func(worker int) {
-			t.Log("start worker:", worker)
-			for cnt := range queue {
-				if _, err := db.Exec(hammerInsert, worker, cnt); err != nil {
-					t.Errorf("worker:%d count:%d, error:%s\n", worker, cnt, err.Error())
-				}
-			}
-			wg.Done()
-		}(i)
-	}
-	for i := 0; i < count; i++ {
-		queue <- i
-	}
-	close(queue)
-	wg.Wait()
-}
-
-func TestHammer(t *testing.T) {
-	hammer(t, 8, 10000)
-}
-
-func getHammerDB(t *testing.T, name string) *sql.DB {
-	if name == "" {
-		name = "hammer.db"
-	}
-	db, err := Open(name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := Commands(db, hammerTime, echoCommands, testout); err != nil {
-		t.Fatal(err)
-	}
-	return db
 }
 
 func memDB(t *testing.T) *sql.DB {
@@ -167,7 +91,7 @@ insert into iptest values(atoip('192.168.1.1'));
 	const testIP = "192.168.1.1"
 	var ipv4 string
 
-	if err := dbutil.Row(db, []interface{}{&ipv4}, "select iptoa(ip) as ipv4 from iptest where ipv4 = ?", testIP); err != nil {
+	if err := row(db, []interface{}{&ipv4}, "select iptoa(ip) as ipv4 from iptest where ipv4 = ?", testIP); err != nil {
 		t.Fatal(err)
 	}
 
@@ -176,7 +100,7 @@ insert into iptest values(atoip('192.168.1.1'));
 	}
 
 	var ip32 int32
-	if err := dbutil.Row(db, []interface{}{&ip32}, "select atoip('8.8.8') as ipv4"); err != nil {
+	if err := row(db, []interface{}{&ip32}, "select atoip('8.8.8') as ipv4"); err != nil {
 		t.Fatal(err)
 	} else {
 		if ip32 != -1 {
@@ -199,7 +123,7 @@ func TestSqliteBadHook(t *testing.T) {
 func simpleQuery(db *sql.DB) error {
 	var one int
 	dest := []interface{}{&one}
-	if err := dbutil.Row(db, dest, "select 1", nil); err != nil {
+	if err := row(db, dest, "select 1", nil); err != nil {
 		return err
 	}
 	if one != 1 {
@@ -288,7 +212,7 @@ func TestFile(t *testing.T) {
 	limit := 3
 	var total int64
 	dest := []interface{}{&total}
-	if err := dbutil.Row(db, dest, "select total from summary where country=? limit ?", "USA", limit); err != nil {
+	if err := row(db, dest, "select total from summary where country=? limit ?", "USA", limit); err != nil {
 		t.Fatal(err)
 	}
 	if total != 3 {
@@ -455,113 +379,6 @@ func TestOpenBadFile(t *testing.T) {
 	} else {
 		t.Log("got expected error:", err)
 	}
-}
-
-func TestServerWrite(t *testing.T) {
-	db := getHammerDB(t, "") //":memory:")
-	s := NewServer(db)
-	elapsed, err := batter(s, testWorkers, testCount)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("writes: %d elapsed: %v", testWorkers*testCount, elapsed)
-	Close(db)
-}
-
-func TestServerRead(t *testing.T) {
-	db := getHammerDB(t, "hammer.db")
-	s := NewServer(db)
-	elapsed, err := butter(s, testWorkers, testCount)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("reads: %d elapsed: %v", testWorkers*testCount, elapsed)
-	Close(db)
-}
-
-func TestServerReadWrite(t *testing.T) {
-	files := []string{
-		"hammer.db",
-		/*
-			"file:hammer.db?cache=shared",
-			"file::memory:?cache=shared",
-		*/
-	}
-	for _, file := range files {
-		t.Log("testing file:", file)
-		readWrite(t, file)
-	}
-}
-
-func readWrite(t *testing.T, file string) {
-	db := getHammerDB(t, file)
-	s := NewServer(db)
-	var wg sync.WaitGroup
-	wg.Add(2)
-	workers := 10
-	count := 1000
-	go func() {
-		elapsed, err := batter(s, workers, count)
-		if err != nil {
-			t.Error(err)
-		}
-		t.Logf("reads: %d elapsed: %v", workers*count, elapsed)
-		wg.Done()
-	}()
-	go func() {
-		elapsed, err := butter(s, 10, 100)
-		if err != nil {
-			t.Error(err)
-		}
-		t.Logf("writes: %d elapsed: %v", workers*count, elapsed)
-		wg.Done()
-	}()
-	wg.Wait()
-	Close(db)
-}
-
-func batter(s *Server, workers, count int) (time.Duration, error) {
-	var wg sync.WaitGroup
-	start := time.Now()
-	wg.Add(workers)
-	for i := 0; i < workers; i++ {
-		go func(worker int) {
-			for cnt := 0; cnt < count; cnt++ {
-				if _, _, err := s.Exec(hammerInsert, worker, cnt); err != nil {
-					panic(err)
-				}
-			}
-			wg.Done()
-		}(i)
-	}
-	wg.Wait()
-	return time.Since(start), nil
-}
-
-func butter(s *Server, workers, count int) (time.Duration, error) {
-	limit := 100
-	var wg sync.WaitGroup
-
-	replies := func(columns []string, row int, values []interface{}) error {
-		//fmt.Println("COLS:", columns, "VALS:", values)
-		return nil
-	}
-
-	start := time.Now()
-	query := "select * from hammer limit ?"
-	wg.Add(workers)
-	for i := 0; i < workers; i++ {
-		go func(worker int) {
-			for cnt := 0; cnt < count; cnt++ {
-				if err := s.Stream(replies, query, limit); err != nil {
-					fmt.Println("WORKER:", worker, "CNT:", cnt, err)
-				}
-			}
-			wg.Done()
-		}(i)
-	}
-	wg.Wait()
-	return time.Since(start), nil
 }
 
 func TestSqliteCreate(t *testing.T) {

@@ -16,7 +16,6 @@ import (
 	"sync"
 
 	sqlite3 "github.com/mattn/go-sqlite3"
-	"github.com/paulstuart/dbutil"
 )
 
 var (
@@ -181,7 +180,7 @@ func sqlInit(driverName, query string, hook Hook, funcs ...FuncReg) {
 // Filename returns the filename of the DB
 func Filename(db *sql.DB) string {
 	var seq, name, file string
-	_ = dbutil.Row(db, []interface{}{&seq, &name, &file}, "PRAGMA database_list")
+	_ = row(db, []interface{}{&seq, &name, &file}, "PRAGMA database_list")
 	return file
 }
 
@@ -201,7 +200,7 @@ func connFilename(conn *sqlite3.SQLiteConn) (string, error) {
 	return filename, connQuery(conn, fn, "PRAGMA database_list")
 }
 
-// Close cleans up the database before closing
+// Close cleans up the database before closing (checkpoints WAL)
 func Close(db *sql.DB) {
 	if _, err := db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
 		log.Printf("error executing WAL checkpoint: %v\n", err)
@@ -283,7 +282,26 @@ SELECT name FROM sqlite_master
 WHERE type='table'
 ORDER BY name
 `
-	return dbutil.NewStreamer(db, q).Table(w, true, nil)
+	fn := func(_ []string, row []interface{}) {
+		if len(row) > 0 {
+			fmt.Fprintln(w, row[0])
+		}
+	}
+	return query(db, fn, q)
+}
+
+// showRow is a handler for the query func
+func showRow(columns []string, row []interface{}) {
+	if columns != nil {
+		fmt.Println(strings.Join(columns, "\t"))
+	}
+	for i, r := range row {
+		if i > 0 {
+			fmt.Print("\t")
+		}
+		fmt.Print(r)
+	}
+	fmt.Print("\n")
 }
 
 // Commands emulates the client reading a series of commands
@@ -348,7 +366,7 @@ func Commands(db *sql.DB, buffer string, echo bool, w io.Writer) error {
 			fmt.Println("CMD> ", multiline)
 		}
 		if startsWith(multiline, "SELECT") {
-			if err := dbutil.NewStreamer(db, multiline).Table(w, false, nil); err != nil {
+			if err := query(db, showRow, multiline); err != nil {
 				return fmt.Errorf("SELECT QUERY: %s FILE: %s ERROR: %w", line, Filename(db), err)
 			}
 		} else if _, err := db.Exec(multiline); err != nil {
@@ -388,7 +406,7 @@ func connQuery(conn *sqlite3.SQLiteConn, fn func([]string, int, []driver.Value) 
 // DataVersion returns the version number of the schema
 func DataVersion(db *sql.DB) (int64, error) {
 	var version int64
-	return version, dbutil.Row(db, []interface{}{&version}, "PRAGMA data_version")
+	return version, row(db, []interface{}{&version}, "PRAGMA data_version")
 }
 
 // Version returns the version of the sqlite library used
@@ -443,12 +461,6 @@ func WithFunctions(functions ...FuncReg) Optional {
 	}
 }
 
-/*
-// NewOptions returns an Options
-func NewOptions(file string) *Options {
-	return &Options{file: file, config: sqlConfig{driver: DefaultDriver}}
-}
-*/
 // open returns a db handler for the given file
 func open(file string, config *Config) (*sql.DB, error) {
 	if config == nil {
@@ -506,6 +518,54 @@ func Opener(opts ...Optional) func(string) (*sql.DB, error) {
 	}
 }
 
+func row(db *sql.DB, dest []interface{}, query string, args ...interface{}) error {
+	return db.QueryRow(query, args...).Scan(dest...)
+}
+
+// Note that columns is nil after the first row
+type handler func(columns []string, row []interface{})
+
+// copied from dbutil
+func getColumns(row *sql.Rows) ([]string, error) {
+	ctypes, err := row.ColumnTypes()
+	if err != nil {
+		return nil, err
+	}
+	columns := make([]string, len(ctypes))
+	for i, c := range ctypes {
+		columns[i] = c.Name()
+	}
+	return columns, nil
+}
+
+func query(db *sql.DB, fn handler, query string, args ...interface{}) error {
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	columns, err := getColumns(rows)
+	if err != nil {
+		return err
+	}
+	dest := make([]interface{}, len(columns))
+	ptrs := make([]interface{}, len(columns))
+	for k := 0; k < len(dest); k++ {
+		ptrs[k] = &dest[k]
+	}
+
+	for rows.Next() {
+		if err := rows.Scan(ptrs...); err != nil {
+			return err
+		}
+		fn(columns, dest)
+		columns = nil // to signal we're past the first row
+	}
+	return rows.Err()
+}
+
+/*
 // Server provides marshaled writes to the sqlite database
 type Server struct {
 	db *sql.DB
@@ -530,3 +590,9 @@ func (s *Server) Stream(fn dbutil.StreamFunc, query string, args ...interface{})
 	defer s.mu.RUnlock()
 	return dbutil.NewStreamer(s.db, query, args...).Stream(fn)
 }
+
+// row returns one row of the results of a query
+func row(db *sql.DB, dest []interface{}, query string, args ...interface{}) error {
+	return db.QueryRow(query, args...).Scan(dest...)
+}
+*/

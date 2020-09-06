@@ -3,3 +3,5 @@
 Helpers for using sqlite3
 
 Tracing of sqlite execution can be enabled by using the `WithTracing` option, which requires using the build tags `sqlite_trace` or `trace`.
+
+Load testing requires using the build tag `hammer` when running tests. 

@@ -1,4 +1,4 @@
-// +build sqlite_trace,trace
+// +build sqlite_trace trace
 
 package sqlite
 
