@@ -10,6 +10,26 @@ import (
 	sqlite3 "github.com/mattn/go-sqlite3"
 )
 
+// WithTracing enables SQLite tracing to the logger
+func WithTracing(logger *log.Logger) Optional {
+	if logger == nil {
+		logger = log.New(os.Stderr, "", log.LstdFlags)
+	}
+
+	eventMask := sqlite3.TraceStmt | sqlite3.TraceProfile | sqlite3.TraceRow | sqlite3.TraceClose
+	hook := func(conn *sqlite3.SQLiteConn) error {
+		return conn.SetTrace(&sqlite3.TraceConfig{
+			Callback:        traceCallback(logger),
+			EventMask:       eventMask,
+			WantExpandedSQL: true,
+		})
+	}
+
+	return func(c *Config) {
+		c.hook = hook
+	}
+}
+
 // TraceHook enables SQLite tracing to the logger
 func TraceHook(logger *log.Logger) Hook {
 	if logger == nil {
@@ -91,7 +111,6 @@ func traceCallback(logger *log.Logger) sqlite3.TraceUserCallback {
 		} else {
 			modeText = "+Tx+"
 		}
-
 		logger.Printf("Trace: ev %d %s conn 0x%x, stmt 0x%x {%q}%s%s%s\n",
 			info.EventCode, modeText, info.ConnHandle, info.StmtHandle,
 			info.StmtOrTrigger, expandedText,

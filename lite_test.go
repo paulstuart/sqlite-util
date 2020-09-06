@@ -144,7 +144,8 @@ func prepare(db *sql.DB) {
 }
 
 func TestFuncs(t *testing.T) {
-	db, err := NewOptions(":memory:").Functions(ipFuncs...).Driver("funky").Open()
+	//db, err := NewOptions(":memory:").Functions(ipFuncs...).Driver("funky").Open()
+	db, err := Open(":memory:", WithFunctions(ipFuncs...), WithDriver("funky"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +187,7 @@ insert into iptest values(atoip('192.168.1.1'));
 
 func TestSqliteBadHook(t *testing.T) {
 	const badDriver = "badhook"
-	_, err := NewOptions(":memory:").Driver(badDriver).Hook(queryBad).Open()
+	_, err := Open(":memory:", WithDriver(badDriver), WithQuery(queryBad))
 
 	if err == nil {
 		t.Fatal("expected error for bad hook")
@@ -215,8 +216,8 @@ func TestSqliteFuncsBad(t *testing.T) {
 		{"", u, true},
 	}
 	const driver = "badfunc"
-	const hook = "select 1"
-	sqlInit(driver, hook, badFuncs...)
+	const query = "select 1"
+	sqlInit(driver, query, nil, badFuncs...)
 	db, err := sql.Open(driver, ":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -229,7 +230,7 @@ func TestSqliteFuncsBad(t *testing.T) {
 }
 
 func TestSqliteBadPath(t *testing.T) {
-	sqlInit(DefaultDriver, "")
+	sqlInit(DefaultDriver, "", nil)
 	_, err := Open(badPath)
 	if err == nil {
 		t.Fatal("expected error for bad path")
@@ -282,7 +283,6 @@ func TestFile(t *testing.T) {
 	}
 	fmt.Fprintf(testout, "V is for: %t\n", testing.Verbose())
 	if err := File(db, "test.sql", testing.Verbose(), testout); err != nil {
-		//if err := File(db, "test.sql", false, ioutil.Discard); err != nil {
 		t.Fatal(err)
 	}
 	limit := 3
@@ -602,7 +602,7 @@ func TestSqliteCreate(t *testing.T) {
 }
 
 func TestMissingDB(t *testing.T) {
-	_, err := NewOptions("this_path_does_not_exist").FailIfMissing(true).Open()
+	_, err := Open("this_path_does_not_exist", WithExists(true))
 	if err == nil {
 		t.Error("should have had error for missing file")
 	}

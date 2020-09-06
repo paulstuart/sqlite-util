@@ -4,24 +4,24 @@ package sqlite
 
 import (
 	"database/sql"
-	"fmt"
+	"io"
+	"io/ioutil"
 	"log"
+	"os"
 	"testing"
-
-	sqlite3 "github.com/mattn/go-sqlite3"
 )
 
-func init() {
-	sql.Register("sqlite3_tracing",
-		&sqlite3.SQLiteDriver{
-			ConnectHook: TraceHook(nil),
-		})
-}
-
 func TestTrace(t *testing.T) {
-	db, err := sql.Open("sqlite3_tracing", ":memory:")
+	var w io.Writer
+	if testing.Verbose() {
+		w = os.Stderr
+	} else {
+		w = ioutil.Discard
+	}
+	l := log.New(w, "", 0)
+
+	db, err := Open(":memory:", WithTracing(l))
 	if err != nil {
-		fmt.Printf("Failed to open database: %#+v\n", err)
 		t.Fatal(err)
 	}
 	defer db.Close()

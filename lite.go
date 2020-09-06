@@ -141,20 +141,20 @@ var ipFuncs = []FuncReg{
 // because there's no way to have multiple instances open associate the connection with the DSN
 //
 // Since our use case is to normally have one instance open this should be workable for now
-func sqlInit(name, hook string, funcs ...FuncReg) {
+func sqlInit(driverName, query string, hook Hook, funcs ...FuncReg) {
 	imu.Lock()
 	defer imu.Unlock()
 
-	if _, ok := initialized[name]; ok {
+	if _, ok := initialized[driverName]; ok {
 		return
 	}
-	initialized[name] = struct{}{}
+	initialized[driverName] = struct{}{}
 
 	drvr := &sqlite3.SQLiteDriver{
 		ConnectHook: func(conn *sqlite3.SQLiteConn) error {
 			for _, fn := range funcs {
 				if err := conn.RegisterFunc(fn.Name, fn.Impl, fn.Pure); err != nil {
-					return err
+					return fmt.Errorf("failed to register %q: %w", fn.Name, err)
 				}
 			}
 			if filename, err := connFilename(conn); err == nil {
@@ -163,16 +163,19 @@ func sqlInit(name, hook string, funcs ...FuncReg) {
 				return fmt.Errorf("couldn't get filename for connection: %+v, error: %w", conn, err)
 			}
 
-			if len(hook) > 0 {
-				if _, err := conn.Exec(hook, nil); err != nil {
-					return fmt.Errorf("connection hook failed: %s -- %w", hook, err)
+			if query != "" {
+				if _, err := conn.Exec(query, nil); err != nil {
+					return fmt.Errorf("connection query failed: %s -- %w", query, err)
 				}
 			}
 
+			if hook != nil {
+				return hook(conn)
+			}
 			return nil
 		},
 	}
-	sql.Register(name, drvr)
+	sql.Register(driverName, drvr)
 }
 
 // Filename returns the filename of the DB
@@ -397,8 +400,9 @@ func Version() (string, int, string) {
 // Config represents the sqlite configuration options
 type Config struct {
 	fail   bool
-	hook   string
+	query  string
 	driver string
+	hook   Hook
 	funcs  []FuncReg
 }
 
@@ -411,8 +415,15 @@ func WithExists(fail bool) Optional {
 	}
 }
 
+// WithQuery adds an sql query to execute for each new connection
+func WithQuery(query string) Optional {
+	return func(c *Config) {
+		c.query = query
+	}
+}
+
 // WithHook adds an sql query to execute for each new connection
-func WithHook(hook string) Optional {
+func WithHook(hook Hook) Optional {
 	return func(c *Config) {
 		c.hook = hook
 	}
@@ -439,11 +450,11 @@ func NewOptions(file string) *Options {
 }
 */
 // open returns a db handler for the given file
-func open(file string, config *sqlConfig) (*sql.DB, error) {
+func open(file string, config *Config) (*sql.DB, error) {
 	if config == nil {
-		config = &sqlConfig{driver: DefaultDriver}
+		config = &Config{driver: DefaultDriver}
 	}
-	sqlInit(config.driver, config.hook, config.funcs...)
+	sqlInit(config.driver, config.query, config.hook, config.funcs...)
 	if !strings.Contains(file, ":memory:") {
 		filename := file
 		filename = strings.TrimPrefix(filename, "file:")
