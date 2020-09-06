@@ -1,4 +1,4 @@
-// +build sqlite_trace trace
+// +build sqlite_trace,trace
 
 package sqlite
 
@@ -78,8 +78,6 @@ func traceCallback(logger *log.Logger) sqlite3.TraceUserCallback {
 			} else {
 				expandedText = fmt.Sprintf(" expanded {%q}", info.ExpandedSQL)
 			}
-		} else {
-			expandedText = ""
 		}
 
 		// SQLite docs as of September 6, 2016: Tracing and Profiling Functions
@@ -119,3 +117,6 @@ func traceCallback(logger *log.Logger) sqlite3.TraceUserCallback {
 		return 0
 	}
 }
+
+// 2020/09/06 09:07:13 insert into founder (nid,app,version,vendor,etag,ip,port,ts,added)
+// values([<nil>     192.168.1.254 80 2020-09-06 09:07:13.686603 -0700 PDT 0001-01-01 00:00:00 +0000 UTC])%!(EXTRA []interface {}=[<nil>     192.168.1.254 80 2020-09-06 09:07:13.686603 -0700 PDT 0001-01-01 00:00:00 +0000 UTC])
