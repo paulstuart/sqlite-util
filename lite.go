@@ -130,7 +130,7 @@ type FuncReg struct {
 	Pure bool
 }
 
-// ipFuncs are functions to convert ipv4 to and from int32
+// ipFuncs have example functions to convert ipv4 to and from int32
 var ipFuncs = []FuncReg{
 	{"iptoa", toIPv4, true},
 	{"atoip", fromIPv4, true},
@@ -493,6 +493,17 @@ func Open(file string, opts ...Optional) (*sql.DB, error) {
 		opt(config)
 	}
 	return open(file, config)
+}
+
+// Opener returns func to open db handler for a given file
+func Opener(opts ...Optional) func(string) (*sql.DB, error) {
+	config := new(Config)
+	for _, opt := range opts {
+		opt(config)
+	}
+	return func(file string) (*sql.DB, error) {
+		return open(file, config)
+	}
 }
 
 // Server provides marshaled writes to the sqlite database
