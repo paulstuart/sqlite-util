@@ -410,7 +410,7 @@ func DataVersion(db *sql.DB) (int64, error) {
 }
 
 // Version returns the version of the sqlite library used
-// libVersion string, libVersionNumber int, sourceID string) {
+// libVersion string, libVersionNumber int, sourceID string {
 func Version() (string, int, string) {
 	return sqlite3.Version()
 }
@@ -457,7 +457,7 @@ func WithDriver(driver string) Optional {
 // Functions registers custom functions
 func WithFunctions(functions ...FuncReg) Optional {
 	return func(c *Config) {
-		c.funcs = functions
+		c.funcs = append(c.funcs, functions...)
 	}
 }
 
@@ -565,34 +565,3 @@ func query(db *sql.DB, fn handler, query string, args ...interface{}) error {
 	return rows.Err()
 }
 
-/*
-// Server provides marshaled writes to the sqlite database
-type Server struct {
-	db *sql.DB
-	mu sync.RWMutex
-}
-
-// NewServer returns a server
-func NewServer(db *sql.DB) *Server {
-	return &Server{db: db}
-}
-
-// Exec executes a writeable statement
-func (s *Server) Exec(query string, args ...interface{}) (last int64, affected int64, err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return dbutil.Exec(s.db, query, args...)
-}
-
-// Stream returns query results to the given function
-func (s *Server) Stream(fn dbutil.StreamFunc, query string, args ...interface{}) error {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return dbutil.NewStreamer(s.db, query, args...).Stream(fn)
-}
-
-// row returns one row of the results of a query
-func row(db *sql.DB, dest []interface{}, query string, args ...interface{}) error {
-	return db.QueryRow(query, args...).Scan(dest...)
-}
-*/
