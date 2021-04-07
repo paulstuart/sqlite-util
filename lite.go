@@ -80,6 +80,9 @@ var (
 
 	registry    = make(map[string]*sqlite3.SQLiteConn)
 	initialized = make(map[string]struct{})
+
+	// Debug enables debugging  output
+	Debug = false
 )
 
 // Hook is an SQLite connection hook
@@ -133,6 +136,7 @@ type FuncReg struct {
 var ipFuncs = []FuncReg{
 	{"iptoa", toIPv4, true},
 	{"atoip", fromIPv4, true},
+	{"polygon", toPolygon, true},
 }
 
 // The only way to get access to the sqliteconn, which is needed to be able to generate
@@ -141,6 +145,9 @@ var ipFuncs = []FuncReg{
 //
 // Since our use case is to normally have one instance open this should be workable for now
 func sqlInit(driverName, query string, hook Hook, funcs ...FuncReg) {
+	if Debug {
+		log.Println("registering driver:", driverName)
+	}
 	imu.Lock()
 	defer imu.Unlock()
 
@@ -154,6 +161,9 @@ func sqlInit(driverName, query string, hook Hook, funcs ...FuncReg) {
 			for _, fn := range funcs {
 				if err := conn.RegisterFunc(fn.Name, fn.Impl, fn.Pure); err != nil {
 					return fmt.Errorf("failed to register %q: %w", fn.Name, err)
+				}
+				if Debug {
+					log.Println("registered function:", fn.Name)
 				}
 			}
 			if filename, err := connFilename(conn); err == nil {
@@ -318,7 +328,7 @@ func Commands(db *sql.DB, buffer string, echo bool, w io.Writer) error {
 	trigger := false
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		if 0 == len(line) {
+		if line == "" {
 			continue
 		}
 		switch {
@@ -565,3 +575,45 @@ func query(db *sql.DB, fn handler, query string, args ...interface{}) error {
 	return rows.Err()
 }
 
+func toPolygon(pts ...interface{}) string {
+	sb := new(strings.Builder)
+	var fLat float64
+	var iLat int64
+	sb.WriteString(`'[`)
+LOOP:
+	for i, pt := range pts {
+		switch pt := pt.(type) {
+		case float64:
+			if Debug {
+				log.Printf("polygon %d (%T): %v\n", i, pt, pt)
+			}
+			if i%2 != 0 {
+				if i > 2 {
+					sb.WriteByte(',')
+				}
+				fmt.Fprintf(sb, "[%.6f,%.6f]", fLat, pt)
+			} else {
+				fLat = pt
+			}
+		case int64:
+			if Debug {
+				log.Printf("polygon %d (%T): %v\n", i, pt, pt)
+			}
+			if i%2 != 0 {
+				if i > 2 {
+					sb.WriteByte(',')
+				}
+				fmt.Fprintf(sb, "[%d,%d]", iLat, pt)
+			} else {
+				iLat = pt
+			}
+		default:
+			if Debug {
+				log.Printf("polygon %d (%T): %v\n", i, pt, pt)
+			}
+			break LOOP
+		}
+	}
+	sb.WriteString(`]'`)
+	return sb.String()
+}

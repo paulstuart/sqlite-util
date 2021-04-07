@@ -424,3 +424,118 @@ func TestMissingDB(t *testing.T) {
 		t.Error("should have had error for missing file")
 	}
 }
+
+func TestNamedParam(t *testing.T) {
+	db, err := Open(testFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	const query = "select id, name from structs where name=$thename"
+	arg := sql.Named("thename", "abc")
+	stmt, err := db.Prepare(query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := stmt.Query(arg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		id   int64
+		name string
+	}
+	var list []result
+	for rows.Next() {
+		var r result
+		if err := rows.Scan(&r.id, &r.name); err != nil {
+			t.Fatal(err)
+		}
+		list = append(list, r)
+	}
+	t.Log("ROWS:", list)
+}
+
+func TestPolygon(t *testing.T) {
+	db, err := Open(":memory:", WithFunctions(ipFuncs...), WithDriver("polygons"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	const (
+		sql = `
+	drop table if exists points;
+	create table points (
+		id integer not null primary key,
+		name text,
+		pt1_0 number,
+		pt1_1 number,
+		pt2_0 number,
+		pt2_1 number,
+		pt3_0 number,
+		pt3_1 number,
+		pt4_0 number,
+		pt4_1 number,
+		pt5_0 number,
+		pt5_1 number
+	);
+	insert into points (name, pt1_0, pt1_1)
+		values('one', 34.12345, -122.77777);
+	insert into points (name, pt1_0, pt1_1, pt2_0, pt2_1)
+		values('two', 1.5, 3.0, 4.5, 9.0);
+	`
+
+		q1 = `
+	select id, polygon(pt1_0,pt1_1,pt2_0,pt2_1,pt3_0,pt3_1)
+	from points;
+	`
+
+		q2 = `
+	with ptlist(p10, p11, p20, p21, p30, p31, p40, p41, p50, p51) as (
+		select 0.0,0.0,0.0,9.0,6.0,8.0,6.0,0.0,0.0,0.0
+	),
+	poly (box) as (
+		select polygon(p10, p11, p20, p21, p30, p31, p40, p41, p50, p51) from ptlist
+	)
+	select box from poly;
+	`
+
+		q3 = `
+	select polygon(1,2,3,4);
+	`
+	)
+
+	_, err = db.Exec(sql)
+	if err != nil {
+		t.Fatalf("%q: %s\n", err, sql)
+	}
+
+	var id int64
+	var box string
+	queryer(t, db, q1, id, box)
+	queryer(t, db, q2, box)
+	queryer(t, db, q3, box)
+}
+
+func queryer(t *testing.T, db *sql.DB, query string, fields ...interface{}) {
+	t.Helper()
+	rows, err := db.Query(query)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	into := make([]interface{}, len(fields))
+	for i := range fields {
+		into[i] = &fields[i]
+	}
+
+	for rows.Next() {
+		if err := rows.Scan(into...); err != nil {
+			t.Fatal(err)
+		}
+		t.Log(fields...)
+	}
+	rows.Close()
+}
