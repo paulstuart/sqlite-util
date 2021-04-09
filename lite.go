@@ -136,7 +136,7 @@ type FuncReg struct {
 var ipFuncs = []FuncReg{
 	{"iptoa", toIPv4, true},
 	{"atoip", fromIPv4, true},
-	{"polygon", toPolygon, true},
+	{"polygon", ToPolygon, true},
 }
 
 // The only way to get access to the sqliteconn, which is needed to be able to generate
@@ -575,7 +575,7 @@ func query(db *sql.DB, fn handler, query string, args ...interface{}) error {
 	return rows.Err()
 }
 
-func toPolygon(pts ...interface{}) string {
+func ToPolygon(pts ...interface{}) string {
 	sb := new(strings.Builder)
 	var fLat float64
 	var iLat int64
