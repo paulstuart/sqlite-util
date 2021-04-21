@@ -273,6 +273,24 @@ func Pragmas(db *sql.DB, w io.Writer) {
 	}
 }
 
+// CompileOptions lists all SQLite compiler options
+func CompileOptions(db *sql.DB, w io.Writer) {
+	rows, err := db.Query("PRAGMA compile_options")
+	if err != nil {
+		log.Println("can't get compiled options:", err)
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var option string
+		if err := rows.Scan(&option); err != nil {
+			log.Println("can't scan row:", err)
+			return
+		}
+		fmt.Fprintln(w, option)
+	}
+}
+
 // File emulates ".read FILENAME"
 func File(db *sql.DB, file string, echo bool, w io.Writer) error {
 	out, err := ioutil.ReadFile(file)
